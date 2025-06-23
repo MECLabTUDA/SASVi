@@ -1,6 +1,7 @@
 data/
-src_sam2/checkpoints
-src_sam2/eval_sasvi_live_maskrcnn_nnunet.py
+src/sam2/checkpoints
+src/sam2/eval_sasvi_live_maskrcnn_nnunet.py
+src/sam2/eval_sasvi_old.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

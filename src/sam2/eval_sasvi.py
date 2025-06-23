@@ -1,10 +1,6 @@
-#TODO: Even over here there can be reversing (If new object detected but still blurry!) - If the tool exist continuosly in few frames, you can prompt it in the middle, then reverse it (might not be suitable for cholec) 
+# Using nnunet on top of overseer for tough instances. But not part of original paper and can be left out
 #TODO: Prediction on reverse direction when overseer prediction confidence is high
-#TODO: Only tracking new object detected (Instead of new bounding box detected)
-#TODO: Overall cleanup on V3 implementation
-#TODO: Explore using result from nnunet when overseer prediction is close (On the area of duplicate find which label has majority)
 #TODO: Fine-tune SAM2 on the dataset
-#TODO: Also remove label of tools leaving the scene 
 
 import os
 import cv2
@@ -28,14 +24,13 @@ from sds_playground.datasets.cataract1k.cataract1ksegm_visualisation import get_
 
 from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 from nnunetv2.imageio.natural_image_reader_writer import NaturalImage2DIO
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sam2.build_sam import build_sam2_video_predictor
-from src.sam2 import kmeans_sampling
+from src.sam2_utils import kmeans_sampling
 from src.data import remap_labels, insert_component_masks
 from src.utils import process_detr_outputs, process_mask2former_outputs
-from eval_sam2 import load_overseer
-
+from src.model import get_model_instance_segmentation
 
 def flatten(lst):
     for item in lst:
@@ -379,12 +374,13 @@ class Mask2Former():
         images = [np.array(Image.open(i)) for i in image_list]
         images = [self.transform(image=i)['image'] for i in images]
         images = [A.pytorch.functional.img_to_tensor(i).to(self.device) for i in images]
-        images = self.processor(images=[image.cpu().numpy() for image in images],
-                                do_rescale=False,
-                                return_tensors="pt").to(self.device)
+        images = torch.stack(images)
+        # images = self.processor(images=[image.cpu().numpy() for image in images],
+        #                         do_rescale=False,
+        #                         return_tensors="pt").to(self.device)
 
         with torch.no_grad():
-            predictions = self.model(**images)
+            predictions = self.model(images)
         predictions = process_mask2former_outputs(predictions,
                                            image_size=reshape_size,
                                            num_labels=self.num_train_classes,
@@ -526,7 +522,6 @@ def sasvi_inference(
     else:
         frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
 
-    #TODO: Need to handle this better
     per_obj_input_mask_cached = {}
     
     # load the video frames and initialize the inference state of SAM2 on this video
@@ -577,7 +572,6 @@ def sasvi_inference(
                                             shift_by_1=shift_by_1, 
                                             palette=palette)
             
-                #TODO: Maybe there is more effeicient way to do this
                 ignore_class_input_mask = ~np.array(list(per_obj_input_mask.values())).any(axis=0)
                 ignore_class_previous_mask = ~np.array(list(per_obj_previous_mask.values())).any(axis=0)
                 additional_points = np.argwhere(ignore_class_input_mask & ~ignore_class_previous_mask)
@@ -617,7 +611,6 @@ def sasvi_inference(
 
         # add the corrected mask to predictor
         for object_id, object_mask in per_obj_input_mask.items():
-            #TODO: Hotfixed the if statement in 396 and 405 (Can be better)
             if idx == 0 or (idx > 0 and object_id in yet_another_unique_label and object_id not in negative_duplicate_list):
                 predictor.add_new_mask(
                     inference_state=inference_state,
@@ -670,7 +663,6 @@ def sasvi_inference(
                     shift_by_1=shift_by_1,
                 )
 
-            #TODO: Define the length as parameter
             future_n_frame = min(10, len(frame_names) - idx)
             per_obj_input_mask_n = []
             duplicate_list = []
@@ -814,6 +806,8 @@ def main():
         "--overseer_type",
         type=str,
         required=True,
+        choices=['MaskRCNN', 'DETR', 'Mask2Former'],
+
         help="path to the Overseer model checkpoint",
     )
     parser.add_argument(
@@ -884,35 +878,54 @@ def main():
         for p in os.listdir(args.base_video_dir)
         if os.path.isdir(os.path.join(args.base_video_dir, p))
     ]
+    video_names = sorted(video_names)
+
     # adding this filter based on the dataset type
     if args.dataset_type == "CADIS":
-        video_names[:] = sorted([item for item in video_names if item.startswith('train')])
+        # video_names[:] = sorted([item for item in video_names if item.startswith('train')])
         num_classes = 18
         ignore_indices = [255]
         shift_by_1 = True
         palette = get_cadis_colormap()
+        maskrcnn_hidden_ft = 32
+        maskrcnn_backbone = 'ResNet18'
+        
     elif args.dataset_type == "CHOLECSEG8K":
-        video_names[:] = sorted([item for item in video_names if item.startswith('video')])
+        # video_names[:] = sorted([item for item in video_names if item.startswith('video')])
         num_classes = 13
         ignore_indices = [0] if args.overseer_type == "Mask2Former" else []
         shift_by_1 = False
         palette = get_cholecseg8k_colormap()
+        maskrcnn_hidden_ft = 64
+        maskrcnn_backbone = 'ResNet50'
+
     elif args.dataset_type == "CATARACT1K":
-        video_names[:] = sorted([item for item in video_names if item.startswith('case')])
+        # video_names[:] = sorted([item for item in video_names if item.startswith('case')])
         num_classes = 14
         ignore_indices = [0] if args.overseer_type == "DETR" or args.overseer_type == "Mask2Former" else []
         shift_by_1 = False
         palette = get_cataract1k_colormap()
+        maskrcnn_hidden_ft = 32
+        maskrcnn_backbone = 'ResNet18'
+
     else:        
         raise NotImplementedError
 
     if args.overseer_type == "MaskRCNN":
-        maskrcnn_model, _, _, _, _ = load_overseer(
-            checkpoint_path=args.overseer_checkpoint, 
-            dataset=args.dataset_type,
-            device=args.device)
+        maskrcnn_model = get_model_instance_segmentation(
+            num_classes=num_classes,
+            trainable_backbone_layers=0,
+            hidden_ft=maskrcnn_hidden_ft,
+            custom_in_ft_box=None,
+            custom_in_ft_mask=None,
+            backbone=maskrcnn_backbone,
+            img_size=(299, 299)
+        )
+        maskrcnn_model.load_state_dict(torch.load(args.overseer_checkpoint, weights_only=True, map_location='cpu'))
+        maskrcnn_model = maskrcnn_model.to(args.device)
+        maskrcnn_model.eval()       
         overseer_model = MaskRCNN(maskrcnn_model, shift_by_1, ignore_indices, num_classes, device=args.device)
-    
+
     elif args.overseer_type == "DETR":
         num_train_classes = num_classes - len(ignore_indices) + 1
         detr_model = DetrForSegmentation.from_pretrained(
