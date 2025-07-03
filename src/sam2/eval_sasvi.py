@@ -22,8 +22,8 @@ from sds_playground.datasets.cholecseg8k.cholecseg8k_visualisation import get_ch
 from sds_playground.datasets.cadisv2.cadisv2_visualisation import get_cadis_colormap
 from sds_playground.datasets.cataract1k.cataract1ksegm_visualisation import get_cataract1k_colormap
 
-from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
-from nnunetv2.imageio.natural_image_reader_writer import NaturalImage2DIO
+# from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+# from nnunetv2.imageio.natural_image_reader_writer import NaturalImage2DIO
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from sam2.build_sam import build_sam2_video_predictor

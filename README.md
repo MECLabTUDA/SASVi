@@ -65,7 +65,7 @@ You can run the training scripts as follows:
 The frames in the video needs to be extracted beforehand and placed in the formatting above. More optional arguments can be found in the script directly.
 
 ```
-python src/sam2/eval_sasvi.py \
+cd src/sam2 && python eval_sasvi.py \
 --sam2_cfg              configs/sam2.1_hiera_l.yaml \
 --sam2_checkpoint       ./checkpoints/<SAM2_CHECKPOINT>.pt \
 --overseer_checkpoint   <PATH_TO_OVERSEER_CHECKPOINT>.pth \
